@@ -54,12 +54,20 @@ jobs:
           done
           echo "::error::Timeout esperando a que $ID $V se indexe en NuGet.org"; exit 1
 
+      - name: Build
+        run: |
+          dotnet build OpStream.BlazorComponents.csproj -c Release \
+            -p:Version="${{ steps.ver.outputs.version }}" \
+            -p:OpStreamVersion="${{ steps.ver.outputs.version }}" \
+            -p:ContinuousIntegrationBuild=true
+
       - name: Pack
         run: |
           dotnet pack OpStream.BlazorComponents.csproj -c Release -o ./artifacts \
             -p:Version="${{ steps.ver.outputs.version }}" \
             -p:OpStreamVersion="${{ steps.ver.outputs.version }}" \
-            -p:ContinuousIntegrationBuild=true
+            -p:ContinuousIntegrationBuild=true \
+            --no-build
 
       - name: Push to NuGet.org
         env:
