@@ -5,6 +5,15 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
 	<OpStreamVersion Condition="'$(OpStreamVersion)' == ''">1.0.0-ci.11</OpStreamVersion>
+    
+    <PackageId>OpStream.BlazorComponents</PackageId>
+    <Version>1.0.0-ci.11</Version>
+    <Authors>OpStream Team</Authors>
+    <Company>OpStream</Company>
+    <Description>Collaborative UI components for Blazor applications using OpStream.</Description>
+    <PackageTags>Blazor;Collaboration;Real-time;UI;Components</PackageTags>
+    <RepositoryUrl>https://github.com/OpStreamCollab/OpStream.BlazorComponents</RepositoryUrl>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
   </PropertyGroup>
 
 
