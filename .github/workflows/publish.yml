@@ -1,0 +1,71 @@
+name: Publish to NuGet
+
+on:
+  repository_dispatch:
+    types: [opstream-packages-published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versión de los paquetes (ej. 1.2.3 o 1.0.0-ci.N)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Resolve version
+        id: ver
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            V="${{ github.event.client_payload.version }}"
+          else
+            V="${{ github.event.inputs.version }}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Versión a publicar: $V"
+
+      # NuGet.org tarda unos minutos en indexar un paquete recién publicado en el repo base (OpStream).
+      # Esperamos a que la versión exacta esté disponible antes de empaquetar,
+      # para que la dependencia OpStream.Client.Transports se resuelva correctamente.
+      - name: Wait for base package on NuGet.org
+        run: |
+          set -euo pipefail
+          V="${{ steps.ver.outputs.version }}"
+          ID="opstream.client.transports"
+          URL="https://api.nuget.org/v3-flatcontainer/$ID/index.json"
+          echo "Esperando a que $ID $V esté disponible en NuGet.org..."
+          for i in $(seq 1 30); do
+            if curl -fsSL "$URL" | grep -q "\"$V\""; then
+              echo "Encontrado $ID $V en NuGet.org"; exit 0
+            fi
+            echo "Intento $i: $ID $V aún no indexado, esperando 20s..."
+            sleep 20
+          done
+          echo "::error::Timeout esperando a que $ID $V se indexe en NuGet.org"; exit 1
+
+      - name: Pack
+        run: |
+          dotnet pack OpStream.BlazorComponents.csproj -c Release -o ./artifacts \
+            -p:Version="${{ steps.ver.outputs.version }}" \
+            -p:OpStreamVersion="${{ steps.ver.outputs.version }}" \
+            -p:ContinuousIntegrationBuild=true
+
+      - name: Push to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          dotnet nuget push "artifacts/*.nupkg" \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate

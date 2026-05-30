@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.AspNetCore.Components.Web;
 
@@ -12,6 +12,7 @@ namespace OpStream.BlazorComponents.Inputs
         private string _fieldName = "";
         private FieldEditor? _editor;
         private bool _locked => _editor is not null;
+        private int _commentCount;
         private ICollabFormContext? _subscribed;
 
         protected override void OnInitialized()
@@ -27,18 +28,18 @@ namespace OpStream.BlazorComponents.Inputs
             }
 
             _editor = Context?.EditorOf(_fieldName);
+            _commentCount = Context?.CommentsForField(_fieldName).Count ?? 0;
         }
 
         private void OnContextChanged()
         {
             _editor = Context?.EditorOf(_fieldName);
+            _commentCount = Context?.CommentsForField(_fieldName).Count ?? 0;
             InvokeAsync(StateHasChanged);
         }
 
-      
         protected override void BuildRenderTree(RenderTreeBuilder builder)
         {
-            // <div class="collab-field ..." onfocusin="..." onfocusout="...">
             builder.OpenElement(0, "div");
             builder.AddAttribute(1, "class", $"collab-field {Class} {(_locked ? "locked" : "")}");
             if (_locked) builder.AddAttribute(2, "style", $"--lock-color:{_editor!.Color};");
@@ -48,7 +49,6 @@ namespace OpStream.BlazorComponents.Inputs
             builder.AddAttribute(4, "onfocusout", EventCallback.Factory.Create<FocusEventArgs>(this,
                 () => Context?.NotifyBlurAsync(_fieldName) ?? Task.CompletedTask));
 
-           
             builder.OpenElement(5, "div");
             builder.AddAttribute(6, "class", "collab-field-head");
             if (_locked)
@@ -59,14 +59,22 @@ namespace OpStream.BlazorComponents.Inputs
                 builder.AddContent(10, $"{_editor!.Name} is editing…");
                 builder.CloseElement();
             }
-            builder.CloseElement();
+            if (Context?.AllowComments == true && _commentCount > 0)
+            {
+                builder.OpenElement(14, "button");
+                builder.AddAttribute(15, "class", "collab-comment-indicator");
+                builder.AddAttribute(16, "title", $"{_commentCount} comment(s) — click to view");
+                builder.AddAttribute(17, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this,
+                    () => Context?.OpenFieldComments(_fieldName)));
+                builder.AddContent(18, $"💬 {_commentCount}");
+                builder.CloseElement();
+            }
+            builder.CloseElement(); // </collab-field-head>
 
-            // <fieldset disabled="...">
             builder.OpenElement(11, "fieldset");
             builder.AddAttribute(12, "class", "collab-field-inner");
             builder.AddAttribute(13, "disabled", _locked);
 
-           
             base.BuildRenderTree(builder);
 
             builder.CloseElement(); // </fieldset>

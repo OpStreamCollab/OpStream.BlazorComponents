@@ -1,3 +1,5 @@
+using OpStream.Client.Transports;
+
 namespace OpStream.BlazorComponents;
 
 /// <summary>
@@ -18,8 +20,19 @@ public interface ICollabFormContext
     /// <summary>Announce that the local user left a field (releases the soft lock).</summary>
     Task NotifyBlurAsync(string fieldName);
 
-    /// <summary>Raised when awareness/locks change so fields can re-render.</summary>
+    /// <summary>Raised when awareness/locks or comments change so fields can re-render.</summary>
     event Action? StateChanged;
+
+    // ── Comments (opt-in; safe no-ops when AllowComments = false) ──────────────
+
+    /// <summary>True when the form was created with AllowComments = true.</summary>
+    bool AllowComments => false;
+
+    /// <summary>All open comments anchored to <paramref name="fieldName"/>.</summary>
+    IReadOnlyList<CommentDto> CommentsForField(string fieldName) => Array.Empty<CommentDto>();
+
+    /// <summary>Opens the thread viewer dialog for <paramref name="fieldName"/>.</summary>
+    void OpenFieldComments(string fieldName) { }
 }
 
 /// <summary>Identity of the peer holding a field's soft lock.</summary>

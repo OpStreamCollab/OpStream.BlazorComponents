@@ -12,6 +12,7 @@ namespace OpStream.BlazorComponents.Inputs
         private string _fieldName = "";
         private FieldEditor? _editor;
         private bool _locked => _editor is not null;
+        private int _commentCount;
         private ICollabFormContext? _subscribed;
 
         protected override void OnInitialized()
@@ -27,11 +28,13 @@ namespace OpStream.BlazorComponents.Inputs
             }
 
             _editor = Context?.EditorOf(_fieldName);
+            _commentCount = Context?.CommentsForField(_fieldName).Count ?? 0;
         }
 
         private void OnContextChanged()
         {
             _editor = Context?.EditorOf(_fieldName);
+            _commentCount = Context?.CommentsForField(_fieldName).Count ?? 0;
             InvokeAsync(StateHasChanged);
         }
 
@@ -56,7 +59,17 @@ namespace OpStream.BlazorComponents.Inputs
                 builder.AddContent(10, $"{_editor!.Name} is editing…");
                 builder.CloseElement();
             }
-            builder.CloseElement();
+            if (Context?.AllowComments == true && _commentCount > 0)
+            {
+                builder.OpenElement(14, "button");
+                builder.AddAttribute(15, "class", "collab-comment-indicator");
+                builder.AddAttribute(16, "title", $"{_commentCount} comment(s) — click to view");
+                builder.AddAttribute(17, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this,
+                    () => Context?.OpenFieldComments(_fieldName)));
+                builder.AddContent(18, $"💬 {_commentCount}");
+                builder.CloseElement();
+            }
+            builder.CloseElement(); // </collab-field-head>
 
             builder.OpenElement(11, "fieldset");
             builder.AddAttribute(12, "class", "collab-field-inner");

@@ -13,19 +13,45 @@
 <div class="collab-bar">
     <span class="collab-status @(_joined ? "ok" : "wait")">@_statusMessage</span>
     <span class="collab-rev">doc: <code>@DocumentId</code> · rev: <code>@_currentRevision</code></span>
-    <span class="collab-peers">
-        @foreach (var p in _peers.Values)
-        {
-            <span class="peer-dot" style="background:@p.Color" title="@p.Name"></span>
-        }
-        @if (_joined)
-        {
-            <span class="peer-dot me" style="background:@_myColor" title="@_myName (you)"></span>
-        }
-    </span>
+
+    @if (ShowConnectedUsers)
+    {
+        <span class="collab-avatars">
+            @foreach (var p in _peers.Values)
+            {
+                <span class="peer-avatar" style="background:@p.Color" title="@p.Name">@Initials(p.Name)</span>
+            }
+            @if (_joined)
+            {
+                <span class="peer-avatar me" style="background:@_myColor;color:@_myColor" title="@_myName (you)">@Initials(_myName)</span>
+            }
+        </span>
+    }
+    else
+    {
+        <span class="collab-peers">
+            @foreach (var p in _peers.Values)
+            {
+                <span class="peer-dot" style="background:@p.Color" title="@p.Name"></span>
+            }
+            @if (_joined)
+            {
+                <span class="peer-dot me" style="background:@_myColor" title="@_myName (you)"></span>
+            }
+        </span>
+    }
+
     @if (!string.IsNullOrEmpty(_lastActivity))
     {
         <span class="collab-activity">@_lastActivity</span>
+    }
+
+    @if (AllowComments)
+    {
+        <button class="collab-comment-btn"
+                disabled="@(string.IsNullOrEmpty(_editingField))"
+                title="@(string.IsNullOrEmpty(_editingField) ? "Focus a field to add a comment" : $"Add comment to {Humanize(_editingField)}")"
+                @onclick="OpenNewCommentDialog">✉</button>
     }
 </div>
 
@@ -38,12 +64,70 @@
     </fieldset>
 </EditForm>
 
+@if (_showNewCommentDialog)
+{
+    <div class="collab-dialog-overlay" @onclick="CloseNewCommentDialog">
+        <div class="collab-dialog" @onclick:stopPropagation>
+            <h4 class="collab-dialog-title">Add comment — @Humanize(_commentDialogField)</h4>
+            <textarea class="collab-dialog-textarea" @bind="_newCommentBody" placeholder="Write a comment…"></textarea>
+            <div class="collab-dialog-actions">
+                <button class="collab-btn collab-btn-primary"
+                        disabled="@(string.IsNullOrWhiteSpace(_newCommentBody))"
+                        @onclick="SubmitNewCommentAsync">Send</button>
+                <button class="collab-btn" @onclick="CloseNewCommentDialog">Cancel</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showFieldCommentsDialog && !string.IsNullOrEmpty(_viewingField))
+{
+    var fieldComments = CommentsForField(_viewingField);
+    var roots = fieldComments.Where(c => c.ParentCommentId is null).ToList();
+    <div class="collab-dialog-overlay" @onclick="CloseFieldCommentsDialog">
+        <div class="collab-dialog collab-dialog-wide" @onclick:stopPropagation>
+            <h4 class="collab-dialog-title">Comments — @Humanize(_viewingField)</h4>
+            @if (!roots.Any())
+            {
+                <p class="collab-no-comments">No comments yet.</p>
+            }
+            @foreach (var root in roots)
+            {
+                var replies = fieldComments.Where(c => c.ParentCommentId == root.Id).ToList();
+                <div class="collab-comment">
+                    <div class="collab-comment-body">@root.Body</div>
+                    <div class="collab-comment-meta">@root.CreatedAt.ToString("g")</div>
+                    @foreach (var reply in replies)
+                    {
+                        <div class="collab-comment collab-comment-reply">
+                            <div class="collab-comment-body">@reply.Body</div>
+                            <div class="collab-comment-meta">@reply.CreatedAt.ToString("g")</div>
+                        </div>
+                    }
+                    <div class="collab-reply-row">
+                        <input class="collab-reply-input" placeholder="Reply…"
+                               value="@GetReply(root.Id)"
+                               @oninput="e => SetReply(root.Id, e.Value?.ToString() ?? "")" />
+                        <button class="collab-btn collab-btn-small collab-btn-primary"
+                                @onclick="() => SubmitReplyAsync(root.Id)">Reply</button>
+                    </div>
+                </div>
+            }
+            <div class="collab-dialog-actions">
+                <button class="collab-btn" @onclick="CloseFieldCommentsDialog">Close</button>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
     [Parameter, EditorRequired] public string DocumentId { get; set; } = "";
     [Parameter] public string DocumentType { get; set; } = "form";
     [Parameter, EditorRequired] public TModel Model { get; set; } = default!;
     [Parameter] public RenderFragment? ChildContent { get; set; }
     [Parameter] public EventCallback OnValidSubmit { get; set; }
+    [Parameter] public bool ShowConnectedUsers { get; set; } = false;
+    [Parameter] public bool AllowComments { get; set; } = false;
 
     public event Action? StateChanged;
     public bool Joined => _joined;
@@ -74,6 +158,15 @@
 
     private readonly Dictionary<string, PeerInfo> _peers = new(StringComparer.Ordinal);
 
+    // ── Comments ──────────────────────────────────────────────────────────────────
+    private readonly Dictionary<string, List<CommentDto>> _commentsByField = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _replyBodies = new(StringComparer.Ordinal);
+    private bool _showNewCommentDialog;
+    private bool _showFieldCommentsDialog;
+    private string _newCommentBody = "";
+    private string _commentDialogField = "";
+    private string _viewingField = "";
+
     protected override void OnParametersSet()
     {
         if (_editContext is null || !ReferenceEquals(_editContext.Model, Model))
@@ -103,6 +196,13 @@
         Client.OnPeerDisconnected += HandlePeerDisconnected;
         Client.OnDisconnected += HandleTransportClosed;
 
+        if (AllowComments)
+        {
+            Client.OnCommentCreated += HandleCommentCreatedAsync;
+            Client.OnCommentUpdated += HandleCommentUpdatedAsync;
+            Client.OnCommentDeleted += HandleCommentDeletedAsync;
+        }
+
         try
         {
             var join = await Client.ConnectAndJoinAsync(DocumentId, DocumentType);
@@ -115,6 +215,18 @@
             _statusMessage = "Connected";
 
             await PublishAwarenessAsync("joined");
+
+            if (AllowComments)
+            {
+                try
+                {
+                    var comments = await Client.ListOpenCommentsAsync(DocumentId);
+                    foreach (var c in comments) AddOrUpdateComment(c);
+                }
+                catch (NotSupportedException) { /* transport does not expose comments */ }
+                catch (Exception ex) { Console.Error.WriteLine($"ListComments failed: {ex.Message}"); }
+            }
+
             NotifyStateChanged();
         }
         catch (Exception ex)
@@ -124,7 +236,7 @@
         }
     }
 
-    // ── EditContext → server (automatic per-field sync) ─────────────────────────
+    // ── EditContext → server ──────────────────────────────────────────────────────
 
     private async void HandleFieldChanged(object? sender, FieldChangedEventArgs e)
     {
@@ -172,7 +284,7 @@
         }
     }
 
-    // ── Server → model ──────────────────────────────────────────────────────────
+    // ── Server → model ────────────────────────────────────────────────────────────
 
     private Task HandleRemoteOpAsync(ReadOnlyMemory<byte> payload, long newRevision)
     {
@@ -190,7 +302,7 @@
                 if (op.TryGetProperty("value", out var value))
                     ApplyToModel(fieldName, value);
                 else
-                    ApplyToModel(fieldName, null); // clear op carries no value
+                    ApplyToModel(fieldName, null);
             }
         }
 
@@ -254,7 +366,7 @@
         }
     }
 
-    // ── ICollabFormContext (consumed by CollabField) ────────────────────────────
+    // ── ICollabFormContext ────────────────────────────────────────────────────────
 
     public FieldEditor? EditorOf(string fieldName)
     {
@@ -280,7 +392,124 @@
         await InvokeAsync(StateHasChanged);
     }
 
-    // ── Awareness ────────────────────────────────────────────────────────────────
+    bool ICollabFormContext.AllowComments => AllowComments;
+
+    IReadOnlyList<CommentDto> ICollabFormContext.CommentsForField(string fieldName) =>
+        _commentsByField.TryGetValue(fieldName, out var list) ? list : Array.Empty<CommentDto>();
+
+    void ICollabFormContext.OpenFieldComments(string fieldName)
+    {
+        _viewingField = fieldName;
+        foreach (var c in CommentsForField(fieldName).Where(c => c.ParentCommentId is null))
+            _replyBodies.TryAdd(c.Id, "");
+        _showFieldCommentsDialog = true;
+        InvokeAsync(StateHasChanged);
+    }
+
+    // Private helper so the template can call CommentsForField without explicit cast.
+    private IReadOnlyList<CommentDto> CommentsForField(string fieldName) =>
+        ((ICollabFormContext)this).CommentsForField(fieldName);
+
+    // ── Comment events ────────────────────────────────────────────────────────────
+
+    private Task HandleCommentCreatedAsync(CommentDto comment)
+    {
+        AddOrUpdateComment(comment);
+        NotifyStateChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task HandleCommentUpdatedAsync(CommentDto comment)
+    {
+        AddOrUpdateComment(comment);
+        NotifyStateChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task HandleCommentDeletedAsync(CommentDeletedDto dto)
+    {
+        foreach (var list in _commentsByField.Values)
+            list.RemoveAll(c => c.Id == dto.CommentId);
+        NotifyStateChanged();
+        return Task.CompletedTask;
+    }
+
+    private void AddOrUpdateComment(CommentDto comment)
+    {
+        var fieldName = FieldFromAnchor(comment.Anchor);
+        if (fieldName is null) return;
+
+        if (!_commentsByField.TryGetValue(fieldName, out var list))
+            _commentsByField[fieldName] = list = [];
+
+        var idx = list.FindIndex(c => c.Id == comment.Id);
+        if (idx >= 0) list[idx] = comment;
+        else list.Add(comment);
+    }
+
+    private static string? FieldFromAnchor(AnchorDto? anchor)
+    {
+        if (anchor?.Kind != "field") return null;
+        return anchor.Data.TryGetProperty("fieldName", out var fn) ? fn.GetString() : null;
+    }
+
+    // ── Comment dialog actions ────────────────────────────────────────────────────
+
+    private void OpenNewCommentDialog()
+    {
+        _commentDialogField = _editingField;
+        _newCommentBody = "";
+        _showNewCommentDialog = true;
+    }
+
+    private void CloseNewCommentDialog() => _showNewCommentDialog = false;
+
+    private async Task SubmitNewCommentAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newCommentBody)) return;
+
+        var anchorData = JsonSerializer.SerializeToElement(new { fieldName = _commentDialogField }, JsonOptions);
+        var cmd = new NewCommentCmd(_newCommentBody.Trim(), new AnchorDto("field", anchorData), null);
+
+        try
+        {
+            var comment = await Client.CreateCommentAsync(DocumentId, cmd);
+            AddOrUpdateComment(comment);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"CreateComment failed: {ex.Message}");
+        }
+
+        _showNewCommentDialog = false;
+        NotifyStateChanged();
+    }
+
+    private void CloseFieldCommentsDialog() => _showFieldCommentsDialog = false;
+
+    private async Task SubmitReplyAsync(string parentId)
+    {
+        if (!_replyBodies.TryGetValue(parentId, out var body) || string.IsNullOrWhiteSpace(body)) return;
+
+        var cmd = new NewCommentCmd(body.Trim(), null, parentId);
+        try
+        {
+            var comment = await Client.CreateCommentAsync(DocumentId, cmd);
+            AddOrUpdateComment(comment);
+            _replyBodies[parentId] = "";
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Reply failed: {ex.Message}");
+        }
+
+        NotifyStateChanged();
+    }
+
+    private string GetReply(string id) => _replyBodies.TryGetValue(id, out var v) ? v : "";
+    private void SetReply(string id, string v) => _replyBodies[id] = v;
+
+    // ── Awareness ─────────────────────────────────────────────────────────────────
 
     private async Task PublishAwarenessAsync(string action)
     {
@@ -322,7 +551,7 @@
             _lastActivity = $"{name} {action}";
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────────────
 
     private void NotifyStateChanged()
     {
@@ -335,6 +564,15 @@
         if (value is null) return null;
         if (value is string s) return string.IsNullOrEmpty(s) ? null : JsonValue.Create(s);
         return JsonSerializer.SerializeToNode(value, value.GetType(), OpStream.Constants.OpStreamJsonOptions.Default);
+    }
+
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? $"{char.ToUpperInvariant(parts[0][0])}{char.ToUpperInvariant(parts[1][0])}"
+            : name.Length >= 2 ? $"{char.ToUpperInvariant(name[0])}{char.ToUpperInvariant(name[1])}"
+            : name.ToUpperInvariant();
     }
 
     private static string Humanize(string name)
@@ -367,6 +605,13 @@
         Client.OnReceiveAwareness -= HandleAwarenessAsync;
         Client.OnPeerDisconnected -= HandlePeerDisconnected;
         Client.OnDisconnected -= HandleTransportClosed;
+
+        if (AllowComments)
+        {
+            Client.OnCommentCreated -= HandleCommentCreatedAsync;
+            Client.OnCommentUpdated -= HandleCommentUpdatedAsync;
+            Client.OnCommentDeleted -= HandleCommentDeletedAsync;
+        }
 
         try { await Client.DisposeAsync(); } catch { /* ignore */ }
     }
@@ -408,6 +653,7 @@
 
     .collab-rev code { color: #007bff; }
 
+    /* Small dot mode (ShowConnectedUsers = false, default) */
     .collab-peers { display: flex; align-items: center; gap: 0.3rem; }
     .peer-dot {
         width: 12px; height: 12px; border-radius: 50%;
@@ -415,7 +661,32 @@
     }
     .peer-dot.me { box-shadow: 0 0 0 2px #fff, 0 0 0 3px currentColor; }
 
+    /* Avatar circle mode (ShowConnectedUsers = true) */
+    .collab-avatars { display: flex; align-items: center; gap: 0.3rem; }
+    .peer-avatar {
+        width: 28px; height: 28px; border-radius: 50%;
+        display: inline-flex; align-items: center; justify-content: center;
+        font-size: 0.65rem; font-weight: 700; color: #fff;
+        border: 1.5px solid rgba(0,0,0,0.15);
+        cursor: default; user-select: none;
+    }
+    .peer-avatar.me { box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px currentColor; }
+
     .collab-activity { margin-left: auto; font-style: italic; color: #888; }
+
+    /* Comment envelope button */
+    .collab-comment-btn {
+        background: none;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        padding: 0.15rem 0.55rem;
+        cursor: pointer;
+        font-size: 0.85rem;
+        color: #555;
+        transition: background 0.15s, border-color 0.15s;
+    }
+    .collab-comment-btn:hover:not(:disabled) { background: #e8f0fe; border-color: #a8c7fa; color: #1a73e8; }
+    .collab-comment-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
     .collab-fieldset { border: none; padding: 0; margin: 0; min-inline-size: auto; }
 
@@ -456,6 +727,19 @@
         white-space: nowrap;
     }
 
+    /* Comment indicator button on each field */
+    .collab-comment-indicator {
+        background: none;
+        border: none;
+        padding: 0 0.2rem;
+        cursor: pointer;
+        font-size: 0.8rem;
+        color: #888;
+        line-height: 1;
+        transition: color 0.15s;
+    }
+    .collab-comment-indicator:hover { color: #1a73e8; }
+
     .collab-field-inner {
         border: none;
         padding: 0;
@@ -464,4 +748,87 @@
     }
 
     .collab-field-inner:disabled { opacity: 0.85; }
+
+    /* ── Dialogs ─────────────────────────────────────────────────────────────── */
+    .collab-dialog-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.35);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+    }
+
+    .collab-dialog {
+        background: #fff;
+        border-radius: 10px;
+        padding: 1.5rem;
+        min-width: 320px;
+        max-width: 480px;
+        width: 90vw;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .collab-dialog-wide { max-width: 600px; max-height: 80vh; overflow-y: auto; }
+
+    .collab-dialog-title { margin: 0; font-size: 1rem; color: #333; }
+
+    .collab-dialog-textarea {
+        width: 100%;
+        min-height: 80px;
+        padding: 0.5rem;
+        border: 1px solid #d0d0d0;
+        border-radius: 6px;
+        font-size: 0.9rem;
+        resize: vertical;
+        box-sizing: border-box;
+        font-family: inherit;
+    }
+
+    .collab-dialog-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+
+    .collab-btn {
+        padding: 0.35rem 1rem;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        background: #f5f5f5;
+        cursor: pointer;
+        font-size: 0.85rem;
+        font-family: inherit;
+    }
+    .collab-btn:hover:not(:disabled) { background: #e8e8e8; }
+    .collab-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .collab-btn-primary { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+    .collab-btn-primary:hover:not(:disabled) { background: #1558b0; border-color: #1558b0; }
+    .collab-btn-small { padding: 0.2rem 0.6rem; font-size: 0.78rem; }
+
+    /* Comment thread inside view dialog */
+    .collab-comment {
+        border: 1px solid #e8e8e8;
+        border-radius: 8px;
+        padding: 0.75rem;
+        margin-bottom: 0.75rem;
+    }
+    .collab-comment-reply {
+        margin-left: 1.5rem;
+        border-color: #f0f0f0;
+        background: #fafafa;
+    }
+    .collab-comment-body { font-size: 0.9rem; color: #222; margin-bottom: 0.25rem; }
+    .collab-comment-meta { font-size: 0.75rem; color: #999; }
+    .collab-no-comments { color: #999; font-style: italic; margin: 0; }
+
+    .collab-reply-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+    .collab-reply-input {
+        flex: 1;
+        padding: 0.25rem 0.5rem;
+        border: 1px solid #d0d0d0;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        font-family: inherit;
+    }
 </style>
