@@ -4,7 +4,7 @@
     <TargetFramework>net9.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-	<OpStreamVersion Condition="'$(OpStreamVersion)' == ''">1.0.0-ci.11</OpStreamVersion>
+	
     
     <PackageId>OpStream.BlazorComponents</PackageId>
     <Authors>OpStream Team</Authors>
@@ -13,6 +13,7 @@
     <PackageTags>Blazor;Collaboration;Real-time;UI;Components</PackageTags>
     <RepositoryUrl>https://github.com/OpStreamCollab/OpStream.BlazorComponents</RepositoryUrl>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <Version>1.0.0-ci.18</Version>
   </PropertyGroup>
 
 
@@ -22,7 +23,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="9.0.16" />
-	<PackageReference Include="OpStream.Client.Transports" Version="$(OpStreamVersion)" />
+	<PackageReference Include="OpStream.Client.Transports" Version="1.0.0-ci.17" />
   </ItemGroup>
 
 </Project>

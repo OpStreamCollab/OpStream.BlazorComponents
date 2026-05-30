@@ -107,7 +107,7 @@
                     <div class="collab-reply-row">
                         <input class="collab-reply-input" placeholder="Reply…"
                                value="@GetReply(root.Id)"
-                               @oninput="e => SetReply(root.Id, e.Value?.ToString() ?? "")" />
+                               @oninput="e => SetReply(root.Id, e.Value?.ToString() ?? string.Empty)" />
                         <button class="collab-btn collab-btn-small collab-btn-primary"
                                 @onclick="() => SubmitReplyAsync(root.Id)">Reply</button>
                     </div>
